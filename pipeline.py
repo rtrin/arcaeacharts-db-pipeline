@@ -12,9 +12,10 @@ import logging
 import os
 import sys
 from pathlib import Path
+from urllib.parse import unquote
 
 from supabase import create_client, Client  # pylint: disable=import-error
-from scraper import scrape_songs_by_level
+from scraper import scrape_songs_by_level, fetch_song
 
 # -----------------------------------------------------------------------------
 # Env & Config
@@ -50,6 +51,17 @@ logger = logging.getLogger(__name__)
 SONGS_BY_LEVEL_CSV = "songs_by_level.csv"
 EXPORT_CSV = "songs_export.csv"
 
+# Manually specified pages to always check/add
+MANUAL_SONG_URLS = [
+    "https://arcaea.fandom.com/wiki/OMAJINAI",
+    "https://arcaea.fandom.com/wiki/CHAIN2NITE",
+    "https://arcaea.fandom.com/wiki/One_Step_Closer",
+    "https://arcaea.fandom.com/wiki/My_life_is_mine_alone!",
+    "https://arcaea.fandom.com/wiki/Melty_Rhapsody",
+    "https://arcaea.fandom.com/wiki/Signal",
+    "https://arcaea.fandom.com/wiki/The_%27Raft%27_taught_me:_your_heart_will_always_find_a_way.",
+]
+
 
 def get_supabase_client() -> Client:
     """Create and return Supabase client using env credentials."""
@@ -75,17 +87,90 @@ def run_pipeline(skip_scrape: bool = False) -> None:
             logger.error("No rows from scrape. Exiting.")
             return
 
+    # 1b. Gap Check (Manual URLs vs Songs_by_Level)
+    # Check if specific songs from the manual list (URLs) are missing.
+    
+    logger.info("Performing gap check against Manual URLs...")
+    try:
+        # Normalize titles for comparison
+        existing_titles_csv = set((r.get("song") or "").strip().lower() for r in rows)
+        
+        # Parse titles from URLs
+        manual_candidates = []
+        for url in MANUAL_SONG_URLS:
+            # Extract title part: .../wiki/Title_Of_Song
+            if "/wiki/" in url:
+                raw_title = url.split("/wiki/")[-1]
+                # Decode (e.g. %27 -> ') and replace underscores
+                title_decoded = unquote(raw_title).replace("_", " ")
+                manual_candidates.append(title_decoded)
+        
+        if not manual_candidates:
+             logger.info("No manual candidates found.")
+        else:
+            # Check DB for existing titles to avoid re-scraping manual songs if already present
+            logger.info("Checking DB for existing manual songs...")
+            # Supabase .in_() filter might hit URL limits if list is huge, but here it's small.
+            db_res = supabase.table("songs").select("title").in_("title", manual_candidates).execute()
+            existing_titles_db = set((item["title"] or "").strip().lower() for item in db_res.data)
+            
+            missing_titles = []
+            for t in manual_candidates:
+                # We compare loosely
+                norm_t = t.strip()
+                lower_t = norm_t.lower()
+                
+                # If it's in the CSV scrape, we good (it will be upserted/updated)
+                if lower_t in existing_titles_csv:
+                    continue
+                    
+                # If it's in the DB already, user wants to skip scraping it
+                if lower_t in existing_titles_db:
+                    logger.info(f"Skipping manual fetch for '{t}' (found in DB).")
+                    continue
+                    
+                missing_titles.append(t)
+            
+            logger.info(f"Checking {len(missing_titles)} missing songs from Manual List...")
+            
+            # Fetch missing
+            fetched_count = 0
+            for i, m_title in enumerate(missing_titles):
+                new_entries = fetch_song(m_title)
+                if new_entries:
+                    logger.info(f"Found missing song: {m_title}")
+                    rows.extend(new_entries)
+                    fetched_count += 1
+                else:
+                    logger.warning(f"Could not parse data for {m_title}")
+                    
+            logger.info(f"Added {fetched_count} confirmed missing songs.")
+        
+    except Exception as e:
+        logger.error(f"Gap check failed: {e}")
+        # We continue with what we have
+
+
     # 2. Build rows for export/upsert (Metadata Only)
     unique_rows = {} # (title, artist, difficulty) -> row_dict
     export_rows = []
     
     for row in rows:
         # Standardize fields
+        const_val = row.get("chart_constant")
+        if const_val in [None, "", "-"]:
+             const_val = None
+        else:
+             try:
+                 const_val = float(const_val)
+             except (ValueError, TypeError):
+                 const_val = None
+
         r = {
             "title": (row.get("song") or "").strip(),
             "artist": (row.get("artist") or "").strip(),
             "difficulty": (row.get("difficulty") or "").strip(),
-            "constant": (row.get("chart_constant") or "").strip(),
+            "constant": const_val,
             "level": (row.get("level") or "").strip(),
             "version": (row.get("version") or "").strip(),
             # imageUrl removed

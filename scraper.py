@@ -8,6 +8,7 @@ Uses MediaWiki API to fetch the parsed page content to avoid basic blocks.
 
 import argparse
 import csv
+import re
 import requests
 from bs4 import BeautifulSoup
 
@@ -143,6 +144,120 @@ def scrape_songs_by_level(save_path=None):
     if save_path:
         save_to_csv(rows, save_path)
     return rows
+
+
+
+# -----------------------------------------------------------------------------
+# Individual song pages (chart info + metadata)
+# -----------------------------------------------------------------------------
+
+def parse_song_soup(soup, fallback_title=""):
+    """Parse song data from a BeautifulSoup object. Returns list of dicts."""
+    title = ""
+    title_elem = soup.select_one(".mw-page-title-main")
+    if title_elem:
+        title = title_elem.get_text(strip=True)
+    if not title:
+        for selector in ["h1.page-header__title", "h1#firstHeading", ".song-template-title", "h1"]:
+            elem = soup.select_one(selector)
+            if elem:
+                title = elem.get_text(strip=True)
+                break
+    if not title and fallback_title:
+        title = fallback_title.replace("_", " ")
+
+    artist = ""
+    artist_elem = soup.select_one(".song-template-artist")
+    if artist_elem:
+        artist = re.sub(r"\([^)]+\)", "", artist_elem.get_text()).strip()
+
+    songs_data = []
+    chart_tables = soup.select("table.pi-horizontal-group")
+    if not chart_tables:
+        return songs_data
+
+    # Helper to clean constant (handle ?, -, ranges)
+    def safe_decimal(val):
+        """Return float/decimal string or None if invalid."""
+        if not val:
+            return None
+        # Remove non-numeric except dot/minus
+        cleaned = re.sub(r"[^\d\.-]", "", val)
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    # Helper to extract level/constant
+    def extract_chart_prop(cell, difficulty_key):
+        span = cell.select_one(f'span[class*="{difficulty_key}"]')
+        return span.get_text(strip=True) if span else ""
+
+    # First table: default tab (PST/PRS/FTR/ETR, sometimes BYD)
+    default_table = chart_tables[0]
+    data_cells = default_table.select("tbody td")
+    if len(data_cells) >= 3:
+        level_cell = data_cells[0]
+        constant_cell = data_cells[2]
+        difficulties = [
+            ("Past", "pst"),
+            ("Present", "prs"),
+            ("Future", "ftr"),
+            ("Eternal", "etr"),
+            ("Beyond", "byd"),
+        ]
+        for difficulty_name, class_key in difficulties:
+            level_str = extract_chart_prop(level_cell, class_key)
+            raw_constant = extract_chart_prop(constant_cell, class_key)
+            constant_val = safe_decimal(raw_constant)
+            
+            if not level_str or level_str.strip() == "-":
+                continue
+            
+            songs_data.append({
+                "song": title,
+                "artist": artist,
+                "difficulty": difficulty_name,
+                "chart_constant": constant_val,
+                "level": level_str,
+                "version": "",
+            })
+
+    # Second table: Beyond tab only (if separate)
+    if len(chart_tables) >= 2:
+        byd_table = chart_tables[1]
+        byd_cells = byd_table.select("tbody td")
+        if len(byd_cells) >= 3:
+            level_str = byd_cells[0].get_text(strip=True)
+            raw_constant = byd_cells[2].get_text(strip=True)
+            constant_val = safe_decimal(raw_constant)
+            
+            if level_str and level_str.strip() != "-":
+                if not any(s.get("difficulty") == "Beyond" for s in songs_data):
+                    songs_data.append({
+                        "song": title,
+                        "artist": artist,
+                        "difficulty": "Beyond",
+                        "chart_constant": constant_val,
+                        "level": level_str,
+                        "version": "",
+                    })
+
+    return songs_data
+
+
+def fetch_song(page_title):
+    """Fetch and parse one song page via API; returns list of song entries."""
+    try:
+        html = fetch_page_via_api(page_title)
+        soup = BeautifulSoup(html, "html.parser")
+        return parse_song_soup(soup, fallback_title=page_title.replace("_", " "))
+    except Exception as e:
+        print(f"Error fetching {page_title}: {e}")
+        return []
+
+
+
 
 
 # -----------------------------------------------------------------------------
