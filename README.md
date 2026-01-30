@@ -1,48 +1,15 @@
 # Arcaea Charts (Fandom) Data
 
-Single scraper for Arcaea Fandom wiki data. Uses the MediaWiki API only (no direct HTML scraping) to avoid blocks.
+Single scraper for Arcaea Fandom wiki data. Uses the MediaWiki API to fetch song metadata without direct HTML scraping.
 
 ```bash
 # Scrape the Songs by Level page → CSV (Song, Artist, Difficulty, Chart Constant, Level, Version)
-python scraper.py songs-by-level -o songs_by_level.csv
-
-# Fetch specific song pages (chart info + jacket URLs) → individual_songs.csv
-python scraper.py song-pages
-
-# Download all song jacket images from Category:Songs into wiki_images/
-python scraper.py wiki-images
+python scraper.py -o songs_by_level.csv
 ```
 
-## Modes
+## Pipeline (Scrape → Supabase)
 
-| Mode | Description |
-|------|-------------|
-| `songs-by-level` | Scrapes [Songs by Level](https://arcaea.fandom.com/wiki/Songs_by_Level): one row per chart (song, artist, difficulty, chart constant, level, version). |
-| `song-pages` | Fetches listed song wiki pages via API; parses chart info and jacket (incl. BYD/Beyond). Writes `individual_songs.csv`. |
-| `wiki-images` | Gets all pages in Category:Songs, extracts jacket (and Beyond) image URLs, downloads each unique image to `wiki_images/`. |
-
-## Options
-
-- `--output`, `-o` – Output CSV path (for `songs-by-level` or `song-pages`).
-- `--delay` – Seconds between API requests (default: 2).
-- `--dir` – Download directory for `wiki-images` (default: `wiki_images`).
-
-## Updating image URLs in a CSV
-
-After downloading wiki images, you can point song rows’ `imageUrl` to local files by title:
-
-```bash
-python update_image_urls.py --csv your_songs.csv --images wiki_images -o your_songs_updated.csv
-```
-
-The script matches CSV `title` to filenames in `wiki_images/`, including URL-encoded names (e.g. `ΟΔΥΣΣΕΙΑ` → `_CE_9F_CE_94_...jpg`) and normalizes subscript/superscript digits (e.g. `INCARNATOR₀₀` → `INCARNATOR_00.jpg`). Use `--title-column` and `--image-column` if your CSV uses different column names.
-
-If your shell prints `_encode: command not found` when running Python, run the command under bash:  
-`/bin/bash -c 'python3 update_image_urls.py ...'`
-
-## Full pipeline (scrape → wiki images → Supabase)
-
-One command to scrape Songs by Level, download wiki images, upload jacket images to Supabase Storage, and upsert rows into the `songs` table:
+One command to scrape "Songs by Level" and upsert metadata rows into the Supabase `songs` table (no images):
 
 ```bash
 python pipeline.py
@@ -54,18 +21,13 @@ graph TD
     B -- No --> C[scraper.py: scrape_songs_by_level]
     C --> D[songs_by_level.csv]
     B -- Yes --> D
-    D --> E{skip_wiki_images?}
-    E -- No --> F[scraper.py: download_wiki_images]
-    F --> G[wiki_images/]
-    E -- Yes --> G
-    G --> H[Map images to songs]
-    H --> I[Upload to Supabase Storage]
-    I --> J[Generate songs_export.csv]
-    J --> K[Upsert to Supabase 'songs' table]
-    K --> L[End]
+    D --> E[Generate songs_export.csv]
+    E --> F[Upsert to Supabase 'songs' table]
+    F --> G[End]
 ```
 
-Optional: `--skip-scrape` to reuse existing `songs_by_level.csv`; `--skip-wiki-images` to skip downloading images. Requires `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the environment or in `.env` (anon key cannot write due to RLS).
+Optional: `--skip-scrape` to reuse existing `songs_by_level.csv`.
+Requires `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the environment or in `.env`.
 
 ## GitHub Actions (automated sync)
 
