@@ -3,7 +3,7 @@
 Full sync pipeline: scrape Songs by Level, download wiki images, upload to Supabase Storage,
 build CSV with Supabase image URLs, upsert into songs table.
 
-Credentials from env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY).
+Credentials from env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (required for writes; anon key is blocked by RLS).
 Loads .env via python-dotenv when available.
 
 Usage: python pipeline.py [--skip-scrape] [--skip-wiki-images]
@@ -15,7 +15,7 @@ import os
 import re
 from pathlib import Path
 
-from supabase import create_client, Client
+from supabase import create_client, Client  # pylint: disable=import-error
 
 from scraper import scrape_songs_by_level, download_wiki_images
 from update_image_urls import build_title_to_file_map, find_image_for_title
@@ -25,7 +25,8 @@ from update_image_urls import build_title_to_file_map, find_image_for_title
 # -----------------------------------------------------------------------------
 
 
-def _load_env() -> None:
+def _load_env() -> None:  # pylint: disable=import-outside-toplevel
+    """Load .env via python-dotenv when available."""
     try:
         from dotenv import load_dotenv
         load_dotenv()
@@ -34,12 +35,13 @@ def _load_env() -> None:
 
 
 def _get_supabase_credentials() -> tuple[str, str]:
-    """Return (url, key) from env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY."""
+    """Return (url, key) from env. Requires service role key (bypasses RLS) for writes."""
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
         raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) must be set."
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set. "
+            "The pipeline writes to Storage and the songs table; the anon key is blocked by RLS."
         )
     return url, key
 
@@ -57,6 +59,7 @@ EXPORT_CSV = "songs_export.csv"
 
 
 def get_supabase_client() -> Client:
+    """Create and return Supabase client using env credentials."""
     url, key = _get_supabase_credentials()
     return create_client(url, key)
 
@@ -68,32 +71,39 @@ def safe_title(title: str) -> str:
 
 
 def get_content_type_from_ext(ext: str) -> str:
-    m = {
+    """Return MIME type for image extension."""
+    mime_map = {
         "jpg": "image/jpeg",
         "jpeg": "image/jpeg",
         "png": "image/png",
         "gif": "image/gif",
         "webp": "image/webp",
     }
-    return m.get(ext.lower(), "image/jpeg")
+    return mime_map.get(ext.lower(), "image/jpeg")
 
 
 def image_url_without_revision(url: str) -> str:
+    """Strip /revision/latest from Supabase storage URL."""
     if not url:
         return url
     return url.replace("/revision/latest", "")
 
 
 def file_exists_in_bucket(supabase: Client, file_path: str) -> bool:
+    """Return True if file_path exists in the storage bucket."""
     try:
         res = supabase.storage.from_(STORAGE_BUCKET).list(path="")
         if res:
             for item in res:
-                name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+                name = (
+                    item.get("name")
+                    if isinstance(item, dict)
+                    else getattr(item, "name", None)
+                )
                 if name == file_path:
                     return True
         return False
-    except Exception:
+    except (OSError, ValueError):
         return False
 
 
@@ -115,19 +125,24 @@ def upload_local_file_to_storage(
             file_bytes,
             file_options={"content-type": content_type},
         )
-    except Exception as e:
-        err = str(e).lower()
-        if "already exists" in err or "duplicate" in err:
-            public_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_filename)
+    except Exception as err:  # pylint: disable=broad-exception-caught
+        err_str = str(err).lower()
+        if "already exists" in err_str or "duplicate" in err_str:
+            public_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(
+                storage_filename
+            )
             return image_url_without_revision(public_url)
-        print(f"  Upload failed for {storage_filename}: {e}")
+        print(f"  Upload failed for {storage_filename}: {err}")
         return None
 
     public_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_filename)
     return image_url_without_revision(public_url)
 
 
-def run_pipeline(skip_scrape: bool = False, skip_wiki_images: bool = False) -> None:
+def run_pipeline(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    skip_scrape: bool = False, skip_wiki_images: bool = False
+) -> None:
+    """Run full sync: scrape, wiki images, upload to storage, upsert songs table."""
     supabase = get_supabase_client()
     project_root = Path(__file__).resolve().parent
     images_dir = project_root / WIKI_IMAGES_DIR
@@ -135,8 +150,8 @@ def run_pipeline(skip_scrape: bool = False, skip_wiki_images: bool = False) -> N
 
     # 1. Scrape Songs by Level
     if skip_scrape and csv_path.exists():
-        with open(csv_path, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+        with open(csv_path, newline="", encoding="utf-8") as csv_file:
+            reader = csv.DictReader(csv_file)
             rows = list(reader)
         print(f"Using existing {SONGS_BY_LEVEL_CSV} ({len(rows)} rows).")
     else:
@@ -169,8 +184,7 @@ def run_pipeline(skip_scrape: bool = False, skip_wiki_images: bool = False) -> N
 
     # 4. For each unique song: ensure file in storage, get public URL
     song_to_image_url: dict[str, str] = {}
-    for song in song_to_path:
-        local_path = song_to_path[song]
+    for song, local_path in song_to_path.items():
         storage_name = safe_title(song) + local_path.suffix.lower()
         if not storage_name.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
             storage_name = safe_title(song) + ".jpg"
@@ -187,39 +201,42 @@ def run_pipeline(skip_scrape: bool = False, skip_wiki_images: bool = False) -> N
 
     # 5. Build rows with imageUrl
     export_rows = []
-    for r in rows:
-        song = (r.get("song") or "").strip()
+    for row in rows:
+        song = (row.get("song") or "").strip()
         image_url = song_to_image_url.get(song) or ""
         export_rows.append({
             "imageUrl": image_url,
             "song": song,
-            "artist": r.get("artist", ""),
-            "difficulty": r.get("difficulty", ""),
-            "chart_constant": r.get("chart_constant", ""),
-            "level": r.get("level", ""),
-            "version": r.get("version", ""),
+            "artist": row.get("artist", ""),
+            "difficulty": row.get("difficulty", ""),
+            "chart_constant": row.get("chart_constant", ""),
+            "level": row.get("level", ""),
+            "version": row.get("version", ""),
         })
 
     # 6. Write export CSV
     export_path = project_root / EXPORT_CSV
-    fieldnames = ["imageUrl", "song", "artist", "difficulty", "chart_constant", "level", "version"]
-    with open(export_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+    fieldnames = [
+        "imageUrl", "song", "artist", "difficulty",
+        "chart_constant", "level", "version",
+    ]
+    with open(export_path, "w", newline="", encoding="utf-8") as out_file:
+        writer = csv.DictWriter(out_file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(export_rows)
     print(f"Wrote {len(export_rows)} rows to {EXPORT_CSV}.")
 
     # 7. Upsert into Supabase songs (map song -> title, chart_constant -> constant)
     db_rows = []
-    for r in export_rows:
+    for row in export_rows:
         db_rows.append({
-            "imageUrl": r["imageUrl"],
-            "title": r["song"],
-            "artist": r["artist"],
-            "difficulty": r["difficulty"],
-            "constant": r["chart_constant"],
-            "level": r["level"],
-            "version": r["version"],
+            "imageUrl": row["imageUrl"],
+            "title": row["song"],
+            "artist": row["artist"],
+            "difficulty": row["difficulty"],
+            "constant": row["chart_constant"],
+            "level": row["level"],
+            "version": row["version"],
         })
 
     # Batch upsert (PostgREST has limits; 100–500 per batch is safe)
@@ -238,16 +255,28 @@ def run_pipeline(skip_scrape: bool = False, skip_wiki_images: bool = False) -> N
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Full sync: scrape, wiki images, Supabase storage, songs table")
-    parser.add_argument("--skip-scrape", action="store_true", help="Reuse existing songs_by_level.csv")
-    parser.add_argument("--skip-wiki-images", action="store_true", help="Skip downloading wiki images")
+    """CLI entry point; run pipeline and exit with 0 on success, 1 on error."""
+    parser = argparse.ArgumentParser(
+        description="Full sync: scrape, wiki images, Supabase storage, songs table"
+    )
+    parser.add_argument(
+        "--skip-scrape", action="store_true",
+        help="Reuse existing songs_by_level.csv",
+    )
+    parser.add_argument(
+        "--skip-wiki-images", action="store_true",
+        help="Skip downloading wiki images",
+    )
     args = parser.parse_args()
     try:
-        run_pipeline(skip_scrape=args.skip_scrape, skip_wiki_images=args.skip_wiki_images)
+        run_pipeline(
+            skip_scrape=args.skip_scrape,
+            skip_wiki_images=args.skip_wiki_images,
+        )
         return 0
-    except Exception as e:
-        print(f"Error: {e}")
-        raise SystemExit(1) from e
+    except Exception as err:
+        print(f"Error: {err}")
+        raise SystemExit(1) from err
 
 
 if __name__ == "__main__":

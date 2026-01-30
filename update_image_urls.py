@@ -3,7 +3,7 @@ Update song rows' imageUrl to local wiki_images paths by matching song title to 
 
 Handles:
 - Normal names: "Fracture Ray" -> Fracture_Ray.jpg, Xterfusion.jpg
-- Encoded names: "ΟΔΥΣΣΕΙΑ" -> _CE_9F_CE_94_CE_A5_CE_A3_CE_A3_CE_95_CE_99_CE_91.jpg
+- Encoded names: "ΟΔΥΣΣΕΙΑ" -> _CE_9F_CE_94_....jpg
   (Fandom stores some filenames as UTF-8 bytes in underscore-hex: _XX_XX_XX)
 
 Usage:
@@ -22,18 +22,18 @@ _SUBSUP_DIGITS = str.maketrans(
 )
 
 
-def _normalize_digits(s: str) -> str:
+def _normalize_digits(text: str) -> str:
     """Replace subscript/superscript digits with ASCII digits for matching."""
-    return (s or "").translate(_SUBSUP_DIGITS)
+    return (text or "").translate(_SUBSUP_DIGITS)
 
 
-def slug(s: str) -> str:
-    """Normalize for matching: alphanumeric + underscore, lower. Subscript/superscript digits → ASCII."""
-    s = (s or "").strip()
-    s = _normalize_digits(s)
-    s = re.sub(r"[^\w\s\-]", " ", s)
-    s = re.sub(r"\s+", "_", s).strip("_")
-    return s.lower()
+def slug(text: str) -> str:
+    """Normalize for matching: alphanumeric + underscore, lower. Subscript/superscript → ASCII."""
+    text = (text or "").strip()
+    text = _normalize_digits(text)
+    text = re.sub(r"[^\w\s\-]", " ", text)
+    text = re.sub(r"\s+", "_", text).strip("_")
+    return text.lower()
 
 
 def title_to_encoded_stem(title: str) -> str:
@@ -41,24 +41,24 @@ def title_to_encoded_stem(title: str) -> str:
     if not title:
         return ""
     raw = title.encode("utf-8")
-    return "_" + "_".join(f"{b:02X}" for b in raw)
+    return "_" + "_".join(f"{byte_val:02X}" for byte_val in raw)
 
 
 def stem_to_title(stem: str) -> str | None:
-    """Decode stem that looks like _XX_XX_XX (UTF-8 hex bytes) to string. Else return None."""
+    """Decode stem _XX_XX_XX (UTF-8 hex bytes) to string. Else return None."""
     if not stem:
         return None
-    s = stem[1:] if stem.startswith("_") else stem
-    parts = s.split("_")
+    stem_part = stem[1:] if stem.startswith("_") else stem
+    parts = stem_part.split("_")
     try:
-        b = bytes(
-            int(p, 16)
-            for p in parts
-            if len(p) == 2 and all(c in "0123456789ABCDEFabcdef" for c in p)
+        raw_bytes = bytes(
+            int(part, 16)
+            for part in parts
+            if len(part) == 2 and all(c in "0123456789ABCDEFabcdef" for c in part)
         )
-        if not b:
+        if not raw_bytes:
             return None
-        return b.decode("utf-8")
+        return raw_bytes.decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return None
 
@@ -118,34 +118,34 @@ def _rel(path: Path, images_dir: Path) -> str:
     return str(path.resolve().relative_to(base))
 
 
-def find_image_for_title(title: str, title_to_path: dict[str, Path], images_dir: Path) -> str | None:
-    """
-    Return relative path (e.g. wiki_images/File.jpg) for the song title, or None.
-    """
+def find_image_for_title(
+    title: str, title_to_path: dict[str, Path], images_dir: Path
+) -> str | None:
+    """Return relative path (e.g. wiki_images/File.jpg) for the song title, or None."""
     if not title or not title.strip():
         return None
-    t = title.strip()
-    k = _normalize_digits(t).lower()
-    s = slug(t)
+    title_clean = title.strip()
+    key_lower = _normalize_digits(title_clean).lower()
+    slug_val = slug(title_clean)
     # 1) Exact match (case-insensitive) – covers decoded Greek etc.
-    if k in title_to_path:
-        return _rel(title_to_path[k], images_dir)
+    if key_lower in title_to_path:
+        return _rel(title_to_path[key_lower], images_dir)
     # 2) Slug match
-    if s in title_to_path:
-        return _rel(title_to_path[s], images_dir)
+    if slug_val in title_to_path:
+        return _rel(title_to_path[slug_val], images_dir)
     # 3) Encoded stem / normalized digits: e.g. INCARNATOR₀₀ → incarnator00
-    key2 = " ".join(t.split()).lower()
+    key2 = " ".join(title_clean.split()).lower()
     key2 = _normalize_digits(key2)
     if key2 in title_to_path:
         return _rel(title_to_path[key2], images_dir)
     # 4) Substring / prefix: e.g. "~ +" might match a file key
     for key, path in title_to_path.items():
-        if s and (key.startswith(s) or s.startswith(key)):
+        if slug_val and (key.startswith(slug_val) or slug_val.startswith(key)):
             return _rel(path, images_dir)
     return None
 
 
-def update_csv_image_urls(
+def update_csv_image_urls(  # pylint: disable=too-many-locals
     csv_path: Path,
     images_dir: Path,
     output_path: Path | None = None,
@@ -159,8 +159,8 @@ def update_csv_image_urls(
     output_path = output_path or csv_path
     title_to_path = build_title_to_file_map(images_dir)
     rows = []
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+    with open(csv_path, newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
         fieldnames = reader.fieldnames or []
         for row in reader:
             rows.append(row)
@@ -175,18 +175,24 @@ def update_csv_image_urls(
             row[image_url_column] = rel
             updated += 1
 
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+    with open(output_path, "w", newline="", encoding="utf-8") as out_file:
+        writer = csv.DictWriter(out_file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     return updated, len(rows)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Update song CSV imageUrl from wiki_images by title match")
+    """CLI entry point: update CSV imageUrl column from wiki_images by title match."""
+    parser = argparse.ArgumentParser(
+        description="Update song CSV imageUrl from wiki_images by title match"
+    )
     parser.add_argument("--csv", default="individual_songs.csv", help="Input CSV path")
     parser.add_argument("--images", default="wiki_images", help="Directory of jacket images")
-    parser.add_argument("--output", "-o", default=None, help="Output CSV (default: overwrite input)")
+    parser.add_argument(
+        "--output", "-o", default=None,
+        help="Output CSV (default: overwrite input)",
+    )
     parser.add_argument("--title-column", default="title", help="Column name for song title")
     parser.add_argument("--image-column", default="imageUrl", help="Column name for image URL")
     args = parser.parse_args()

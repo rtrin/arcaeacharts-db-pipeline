@@ -1,6 +1,6 @@
 # Sync songs: scrape Songs by Level, download wiki images, upload to Supabase Storage, upsert into songs table.
 # Runs on schedule and can be triggered manually.
-# Uses the PROD environment: set SUPABASE_URL and SUPABASE_ANON_KEY as Variables, and SUPABASE_SERVICE_ROLE_KEY as a Secret.
+# Uses the PROD environment: set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY as Variables, and SUPABASE_SERVICE_ROLE_KEY as a Secret.
 
 name: Sync songs to Supabase
 
@@ -36,9 +36,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Lint
+        run: pylint scraper.py pipeline.py update_image_urls.py
+
       - name: Run pipeline
         env:
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python pipeline.py

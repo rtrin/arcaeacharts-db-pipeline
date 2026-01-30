@@ -1,8 +1,8 @@
 """
 Arcaea Fandom scraper — single entry point.
 
-- Songs by Level: scrape the Songs_by_Level wiki page (table: Song, Artist, Difficulty, Chart Constant, Level, Version).
-- Song pages: fetch individual song pages via MediaWiki API and parse chart info + jacket (incl. BYD).
+- Songs by Level: scrape Songs_by_Level (Song, Artist, Difficulty, Chart Constant, Level, Version).
+- Song pages: fetch song pages via MediaWiki API; parse chart info + jacket (incl. BYD).
 - Wiki images: download all song jacket images from Category:Songs.
 
 Uses MediaWiki API only (no direct HTML scraping) to avoid Fandom blocks.
@@ -42,8 +42,8 @@ def save_to_csv(data, filename):
     if not data:
         print("No data to save.")
         return
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=data[0].keys())
+    with open(filename, "w", newline="", encoding="utf-8") as out_file:
+        writer = csv.DictWriter(out_file, fieldnames=data[0].keys())
         writer.writeheader()
         writer.writerows(data)
     print(f"Saved {len(data)} rows to {filename}")
@@ -62,9 +62,11 @@ def fetch_page_via_api(page_title):
         "format": "json",
         "redirects": "1",
     }
-    r = requests.get(API_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-    r.raise_for_status()
-    data = r.json()
+    response = requests.get(
+        API_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    data = response.json()
     if "error" in data:
         raise ValueError(data["error"].get("info", str(data["error"])))
     return data["parse"]["text"]["*"]
@@ -74,7 +76,7 @@ def fetch_page_via_api(page_title):
 # Songs by Level (Songs_by_Level page)
 # -----------------------------------------------------------------------------
 
-def parse_songs_by_level_html(html):
+def parse_songs_by_level_html(html):  # pylint: disable=too-many-locals,too-many-branches
     """Parse the Songs by Level wiki page HTML into a list of row dicts.
 
     Table columns: Song, Artist, Difficulty, Chart Constant, Level, Version.
@@ -96,16 +98,16 @@ def parse_songs_by_level_html(html):
     if not tables:
         # Fallback: any table with 6+ columns in first data row
         for table in soup.select("table"):
-            for tr in table.select("tbody tr"):
-                tds = tr.select("td")
+            for row in table.select("tbody tr"):
+                tds = row.select("td")
                 if len(tds) >= 6:
                     tables = [table]
                     break
             if tables:
                 break
     for table in tables:
-        for tr in table.select("tbody tr"):
-            tds = tr.select("td")
+        for row in table.select("tbody tr"):
+            tds = row.select("td")
             if len(tds) < 6:
                 continue
             # Song: often <a href="/wiki/...">Display name</a>
@@ -155,7 +157,7 @@ def scrape_songs_by_level(save_path=None):
 # Individual song pages (chart info + jacket, BYD support)
 # -----------------------------------------------------------------------------
 
-def parse_song_soup(soup, fallback_title=""):
+def parse_song_soup(soup, fallback_title=""):  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Parse song data from a BeautifulSoup object. Handles BYD and Beyond jacket."""
     title = ""
     title_elem = soup.select_one(".mw-page-title-main")
@@ -163,9 +165,9 @@ def parse_song_soup(soup, fallback_title=""):
         title = title_elem.get_text(strip=True)
     if not title:
         for selector in ["h1.page-header__title", "h1#firstHeading", ".song-template-title", "h1"]:
-            el = soup.select_one(selector)
-            if el:
-                title = el.get_text(strip=True)
+            elem = soup.select_one(selector)
+            if elem:
+                title = elem.get_text(strip=True)
                 break
     if not title and fallback_title:
         title = fallback_title.replace("_", " ")
@@ -261,11 +263,11 @@ def fetch_songs(page_titles, delay_seconds=2, output_csv="individual_songs.csv")
         print(f"Fetching: {title}...")
         try:
             entries = fetch_song(title)
-            for e in entries:
-                e["id"] = len(all_songs) + 1
-                all_songs.append(e)
-        except Exception as e:
-            print(f"Error: {e}")
+            for entry in entries:
+                entry["id"] = len(all_songs) + 1
+                all_songs.append(entry)
+        except (ValueError, requests.RequestException) as err:
+            print(f"Error: {err}")
         if i < len(page_titles) - 1:
             time.sleep(delay_seconds)
     save_to_csv(all_songs, output_csv)
@@ -292,11 +294,13 @@ def get_all_song_titles():
         }
         if cmcontinue:
             params["cmcontinue"] = cmcontinue
-        r = requests.get(API_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-        for m in data.get("query", {}).get("categorymembers", []):
-            titles.append(m["title"])
+        response = requests.get(
+            API_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        data = response.json()
+        for member in data.get("query", {}).get("categorymembers", []):
+            titles.append(member["title"])
         cont = data.get("continue", {})
         cmcontinue = cont.get("cmcontinue")
         if not cmcontinue:
@@ -327,19 +331,21 @@ def image_url_to_filename(url, fallback="image"):
 def download_image(url, filepath):
     """Download url to filepath; return True on success."""
     try:
-        r = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, stream=True)
-        r.raise_for_status()
+        response = requests.get(
+            url, headers=HEADERS, timeout=REQUEST_TIMEOUT, stream=True
+        )
+        response.raise_for_status()
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(filepath, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
+        with open(filepath, "wb") as out_file:
+            for chunk in response.iter_content(chunk_size=8192):
+                out_file.write(chunk)
         return True
-    except Exception as e:
-        print(f"    Download failed: {e}")
+    except (OSError, requests.RequestException) as err:
+        print(f"    Download failed: {err}")
         return False
 
 
-def download_wiki_images(download_dir=None):
+def download_wiki_images(download_dir=None):  # pylint: disable=too-many-locals
     """Download all song jacket images from Category:Songs.
 
     Uses API to fetch each song page, parses jacket (and Beyond) URLs, downloads
@@ -362,8 +368,8 @@ def download_wiki_images(download_dir=None):
             html = fetch_page_via_api(page_title)
             soup = BeautifulSoup(html, "html.parser")
             entries = parse_song_soup(soup, fallback_title=page_title.replace("_", " "))
-        except Exception as e:
-            print(f"    Skip: {e}")
+        except (ValueError, requests.RequestException) as err:
+            print(f"    Skip: {err}")
             skipped += 1
             continue
 
@@ -382,7 +388,8 @@ def download_wiki_images(download_dir=None):
                 print(f"    Saved {fname}")
         time.sleep(DELAY_BETWEEN_PAGES)
 
-    print(f"\nDone. Downloaded {downloaded} new images (skipped {skipped} pages). Saved to {download_dir}/")
+    print(f"\nDone. Downloaded {downloaded} new images (skipped {skipped} pages).")
+    print(f"Saved to {download_dir}/")
     return downloaded
 
 
@@ -391,15 +398,30 @@ def download_wiki_images(download_dir=None):
 # -----------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Arcaea Fandom scraper (Songs by Level, song pages, wiki images)")
+    """CLI entry point for scraper modes."""
+    parser = argparse.ArgumentParser(
+        description="Arcaea Fandom scraper (Songs by Level, song pages, wiki images)"
+    )
     parser.add_argument(
         "mode",
         choices=["songs-by-level", "song-pages", "wiki-images"],
-        help="songs-by-level: scrape Songs_by_Level page; song-pages: fetch listed song pages; wiki-images: download all jackets from Category:Songs",
+        help=(
+            "songs-by-level: scrape Songs_by_Level; song-pages: fetch song pages; "
+            "wiki-images: download jackets from Category:Songs"
+        ),
     )
-    parser.add_argument("--output", "-o", help="Output CSV (songs-by-level: default songs_by_level.csv; song-pages: default individual_songs.csv)")
-    parser.add_argument("--delay", type=float, default=2.0, help="Delay between API requests (seconds)")
-    parser.add_argument("--dir", dest="download_dir", default=None, help="Download directory for wiki-images (default: wiki_images)")
+    parser.add_argument(
+        "--output", "-o",
+        help="Output CSV (songs-by-level or song-pages default)",
+    )
+    parser.add_argument(
+        "--delay", type=float, default=2.0,
+        help="Delay between API requests (seconds)",
+    )
+    parser.add_argument(
+        "--dir", dest="download_dir", default=None,
+        help="Download directory for wiki-images (default: wiki_images)",
+    )
     args = parser.parse_args()
 
     if args.mode == "songs-by-level":
