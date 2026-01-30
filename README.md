@@ -32,7 +32,7 @@ python scraper.py wiki-images
 After downloading wiki images, you can point song rows’ `imageUrl` to local files by title:
 
 ```bash
-python update_image_urls.py --csv individual_songs.csv --images wiki_images -o individual_songs_updated.csv
+python update_image_urls.py --csv your_songs.csv --images wiki_images -o your_songs_updated.csv
 ```
 
 The script matches CSV `title` to filenames in `wiki_images/`, including URL-encoded names (e.g. `ΟΔΥΣΣΕΙΑ` → `_CE_9F_CE_94_...jpg`) and normalizes subscript/superscript digits (e.g. `INCARNATOR₀₀` → `INCARNATOR_00.jpg`). Use `--title-column` and `--image-column` if your CSV uses different column names.
