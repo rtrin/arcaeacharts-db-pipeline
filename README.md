@@ -52,11 +52,11 @@ Optional: `--skip-scrape` to reuse existing `songs_by_level.csv`; `--skip-wiki-i
 
 ## GitHub Actions (automated sync)
 
-The pipeline can run on a schedule or on demand via GitHub Actions.
+The pipeline can run on a schedule or on demand via GitHub Actions. The workflow uses the **PROD** environment.
 
 - **Triggers:** Daily at 4:00 UTC (cron) and manual run from the Actions tab (`workflow_dispatch`).
-- **Required repository secrets:** In the repo go to **Settings → Secrets and variables → Actions**, then add:
-  - `SUPABASE_URL` – your Supabase project URL (e.g. `https://xxxx.supabase.co`).
-  - `SUPABASE_SERVICE_ROLE_KEY` – your Supabase service role key (needed for storage upload and table upsert).
+- **PROD environment:** In **Settings → Secrets and variables → Actions**, open **Environments** and select **PROD**. Then:
+  - **Variables:** `SUPABASE_URL`, `SUPABASE_ANON_KEY`.
+  - **Secrets:** `SUPABASE_SERVICE_ROLE_KEY` (required for storage upload and table upsert; anon key usually has no write access).
 
 Do not commit `.env`; the workflow uses these secrets as environment variables. After pushing the workflow file (`.github/workflows/sync-songs.yml`) and setting secrets, run the “Sync songs to Supabase” workflow once manually from the Actions tab to verify.

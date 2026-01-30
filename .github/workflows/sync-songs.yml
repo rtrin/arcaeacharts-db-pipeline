@@ -1,6 +1,6 @@
 # Sync songs: scrape Songs by Level, download wiki images, upload to Supabase Storage, upsert into songs table.
 # Runs on schedule and can be triggered manually.
-# Required repo secrets: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+# Uses the PROD environment: set SUPABASE_URL and SUPABASE_ANON_KEY as Variables, and SUPABASE_SERVICE_ROLE_KEY as a Secret.
 
 name: Sync songs to Supabase
 
@@ -13,6 +13,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    environment: PROD
     timeout-minutes: 30
 
     steps:
@@ -37,6 +38,7 @@ jobs:
 
       - name: Run pipeline
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python pipeline.py

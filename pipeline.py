@@ -3,7 +3,9 @@
 Full sync pipeline: scrape Songs by Level, download wiki images, upload to Supabase Storage,
 build CSV with Supabase image URLs, upsert into songs table.
 
-Reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from environment (or .env via python-dotenv).
+Credentials from env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY).
+Loads .env via python-dotenv when available.
+
 Usage: python pipeline.py [--skip-scrape] [--skip-wiki-images]
 """
 
@@ -13,16 +15,36 @@ import os
 import re
 from pathlib import Path
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
 from supabase import create_client, Client
 
 from scraper import scrape_songs_by_level, download_wiki_images
 from update_image_urls import build_title_to_file_map, find_image_for_title
+
+# -----------------------------------------------------------------------------
+# Env loading (optional dotenv)
+# -----------------------------------------------------------------------------
+
+
+def _load_env() -> None:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+
+def _get_supabase_credentials() -> tuple[str, str]:
+    """Return (url, key) from env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY."""
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
+    if not url or not key:
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) must be set."
+        )
+    return url, key
+
+
+_load_env()
 
 # -----------------------------------------------------------------------------
 # Config
@@ -35,12 +57,7 @@ EXPORT_CSV = "songs_export.csv"
 
 
 def get_supabase_client() -> Client:
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_ANON_KEY")
-    if not url or not key:
-        raise RuntimeError(
-            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) must be set."
-        )
+    url, key = _get_supabase_credentials()
     return create_client(url, key)
 
 
