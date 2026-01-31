@@ -166,6 +166,10 @@ def run_pipeline(skip_scrape: bool = False) -> None:
              except (ValueError, TypeError):
                  const_val = None
 
+        # Exclude songs with constant > 13 per user request
+        if const_val is not None and const_val > 13:
+            continue
+
         r = {
             "title": (row.get("song") or "").strip(),
             "artist": (row.get("artist") or "").strip(),
