@@ -12,10 +12,9 @@ import logging
 import os
 import sys
 from pathlib import Path
-from urllib.parse import unquote
 
 from supabase import create_client, Client  # pylint: disable=import-error
-from scraper import scrape_songs_by_level, fetch_song
+from scraper import scrape_songs_by_level, fetch_song, scrape_news_links, filter_song_pages
 
 # -----------------------------------------------------------------------------
 # Env & Config
@@ -51,17 +50,6 @@ logger = logging.getLogger(__name__)
 SONGS_BY_LEVEL_CSV = "songs_by_level.csv"
 EXPORT_CSV = "songs_export.csv"
 
-# Manually specified pages to always check/add
-MANUAL_SONG_URLS = [
-    "https://arcaea.fandom.com/wiki/OMAJINAI",
-    "https://arcaea.fandom.com/wiki/CHAIN2NITE",
-    "https://arcaea.fandom.com/wiki/One_Step_Closer",
-    "https://arcaea.fandom.com/wiki/My_life_is_mine_alone!",
-    "https://arcaea.fandom.com/wiki/Melty_Rhapsody",
-    "https://arcaea.fandom.com/wiki/Signal",
-    "https://arcaea.fandom.com/wiki/The_%27Raft%27_taught_me:_your_heart_will_always_find_a_way.",
-]
-
 
 def get_supabase_client() -> Client:
     """Create and return Supabase client using env credentials."""
@@ -87,56 +75,48 @@ def run_pipeline(skip_scrape: bool = False) -> None:
             logger.error("No rows from scrape. Exiting.")
             return
 
-    # 1b. Gap Check (Manual URLs vs Songs_by_Level)
-    # Check if specific songs from the manual list (URLs) are missing.
+    # 1b. Gap Check (News Section Songs vs Songs_by_Level)
+    # Automatically scrape song links from the News section and check for missing songs.
     
-    logger.info("Performing gap check against Manual URLs...")
+    logger.info("Scraping News section for new songs...")
     try:
-        # Normalize titles for comparison
-        existing_titles_csv = set((r.get("song") or "").strip().lower() for r in rows)
+        # Get all page links from News section
+        news_page_titles = scrape_news_links()
         
-        # Parse titles from URLs
-        manual_candidates = []
-        for url in MANUAL_SONG_URLS:
-            # Extract title part: .../wiki/Title_Of_Song
-            if "/wiki/" in url:
-                raw_title = url.split("/wiki/")[-1]
-                # Decode (e.g. %27 -> ') and replace underscores
-                title_decoded = unquote(raw_title).replace("_", " ")
-                manual_candidates.append(title_decoded)
+        # Filter to only song pages using API
+        song_titles = filter_song_pages(news_page_titles)
         
-        if not manual_candidates:
-             logger.info("No manual candidates found.")
+        if not song_titles:
+            logger.info("No song pages found in News section.")
         else:
+            # Normalize existing titles for comparison
+            existing_titles_csv = set((r.get("song") or "").strip().lower() for r in rows)
+            
+            # Find missing songs
             missing_titles = []
-            for t in manual_candidates:
-                # We compare loosely
-                norm_t = t.strip()
-                lower_t = norm_t.lower()
-                
-                # If it's in the CSV scrape, we good (it will be upserted/updated)
-                if lower_t in existing_titles_csv:
-                    continue
-                    
-                missing_titles.append(t)
+            for title in song_titles:
+                # Normalize for comparison (replace underscores, lowercase)
+                norm_title = title.replace("_", " ").strip().lower()
+                if norm_title not in existing_titles_csv:
+                    missing_titles.append(title)
             
-            logger.info(f"Checking {len(missing_titles)} missing songs from Manual List...")
+            logger.info(f"Found {len(missing_titles)} new songs from News section.")
             
-            # Fetch missing
+            # Fetch missing songs
             fetched_count = 0
-            for i, m_title in enumerate(missing_titles):
+            for m_title in missing_titles:
                 new_entries = fetch_song(m_title)
                 if new_entries:
-                    logger.info(f"Found missing song: {m_title}")
+                    logger.info(f"Added new song: {m_title}")
                     rows.extend(new_entries)
                     fetched_count += 1
                 else:
                     logger.warning(f"Could not parse data for {m_title}")
                     
-            logger.info(f"Added {fetched_count} confirmed missing songs.")
+            logger.info(f"Added {fetched_count} new songs from News section.")
         
     except Exception as e:
-        logger.error(f"Gap check failed: {e}")
+        logger.error(f"News section scraping failed: {e}")
         # We continue with what we have
 
 

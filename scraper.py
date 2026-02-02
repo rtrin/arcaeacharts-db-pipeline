@@ -23,7 +23,123 @@ HEADERS = {
 }
 
 SONGS_BY_LEVEL_PAGE = "Songs_by_Level"
+WIKI_HOME_PAGE = "Arcaea_Wiki"
 REQUEST_TIMEOUT = 30
+
+
+# -----------------------------------------------------------------------------
+# News Section Scraper
+# -----------------------------------------------------------------------------
+
+def scrape_news_links():
+    """Scrape the wiki homepage and extract all links from the News section.
+    
+    Only parses the visible Mobile tab (display: block), not the hidden Switch tab.
+    
+    Returns:
+        List of wiki page titles (e.g., ["OMAJINAI", "CHAIN2NITE", ...])
+    """
+    print("Fetching News section from homepage...")
+    params = {
+        "action": "parse",
+        "page": WIKI_HOME_PAGE,
+        "prop": "text",
+        "format": "json",
+        "redirects": "1",
+    }
+    response = requests.get(
+        API_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    data = response.json()
+    if "error" in data:
+        raise ValueError(data["error"].get("info", str(data["error"])))
+    
+    html = data["parse"]["text"]["*"]
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # Find the News section: look for the visible tabber tab (display: block)
+    # The visible tab is inside a tabberex-body with display: block style
+    page_titles = set()
+    
+    # Find tabberex-tab divs and only use the one with display: block
+    visible_tab = None
+    for tab in soup.select(".tabberex-tab"):
+        style = tab.get("style", "")
+        if "display: block" in style or "display:block" in style:
+            visible_tab = tab
+            break
+    
+    if not visible_tab:
+        # Fallback: try the first tabberex-tab
+        visible_tab = soup.select_one(".tabberex-tab")
+    
+    if visible_tab:
+        # Find links in the visible News section only
+        for link in visible_tab.select("a[href^='/wiki/']"):
+            href = link.get("href", "")
+            if "/wiki/" in href:
+                # Extract page title from /wiki/Page_Title
+                page_title = href.split("/wiki/")[-1]
+                # Skip special pages, categories, files, etc.
+                if ":" in page_title:
+                    continue
+                # Skip anchors
+                if "#" in page_title:
+                    page_title = page_title.split("#")[0]
+                if page_title:
+                    page_titles.add(page_title)
+    
+    print(f"Found {len(page_titles)} unique page links from News section.")
+    return list(page_titles)
+
+
+def filter_song_pages(page_titles):
+    """Filter a list of page titles to only include pages in Category:Songs.
+    
+    Uses MediaWiki API batch query to check categories efficiently.
+    
+    Args:
+        page_titles: List of wiki page titles to check.
+        
+    Returns:
+        List of page titles that belong to Category:Songs.
+    """
+    if not page_titles:
+        return []
+    
+    song_pages = []
+    # API allows up to 50 titles per request
+    batch_size = 50
+    
+    for i in range(0, len(page_titles), batch_size):
+        batch = page_titles[i:i + batch_size]
+        titles_param = "|".join(batch)
+        
+        params = {
+            "action": "query",
+            "titles": titles_param,
+            "prop": "categories",
+            "cllimit": "max",  # Get all categories
+            "format": "json",
+        }
+        response = requests.get(
+            API_URL, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        pages = data.get("query", {}).get("pages", {})
+        for page_id, page_data in pages.items():
+            if page_id == "-1":  # Page doesn't exist
+                continue
+            categories = page_data.get("categories", [])
+            cat_titles = [c.get("title", "") for c in categories]
+            if "Category:Songs" in cat_titles:
+                song_pages.append(page_data.get("title", ""))
+    
+    print(f"Filtered to {len(song_pages)} song pages.")
+    return song_pages
 
 
 # -----------------------------------------------------------------------------
