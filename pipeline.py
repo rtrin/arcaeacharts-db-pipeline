@@ -21,6 +21,7 @@ from scraper import scrape_songs_by_level, fetch_song, scrape_news_links, filter
 # -----------------------------------------------------------------------------
 
 def _load_env() -> None:
+    
     """Load .env via python-dotenv when available."""
     try:
         from dotenv import load_dotenv

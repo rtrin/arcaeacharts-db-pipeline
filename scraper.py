@@ -65,7 +65,7 @@ def scrape_news_links():
     # Find tabberex-tab divs and only use the one with display: block
     visible_tab = None
     for tab in soup.select(".tabberex-tab"):
-        style = tab.get("style", "")
+        style = str(tab.get("style", ""))
         if "display: block" in style or "display:block" in style:
             visible_tab = tab
             break
@@ -77,7 +77,7 @@ def scrape_news_links():
     if visible_tab:
         # Find links in the visible News section only
         for link in visible_tab.select("a[href^='/wiki/']"):
-            href = link.get("href", "")
+            href = str(link.get("href", ""))
             if "/wiki/" in href:
                 # Extract page title from /wiki/Page_Title
                 page_title = href.split("/wiki/")[-1]
@@ -215,6 +215,7 @@ def parse_songs_by_level_html(html):  # pylint: disable=too-many-locals,too-many
             if tables:
                 break
     for table in tables:
+        rows_processed = 0
         for row in table.select("tbody tr"):
             tds = row.select("td")
             if len(tds) < 6:
@@ -241,6 +242,11 @@ def parse_songs_by_level_html(html):  # pylint: disable=too-many-locals,too-many
                 "level": level,
                 "version": version,
             })
+            rows_processed += 1
+        # If we successfully parsed rows from this table, stop (assume it's the main table)
+        # Filters out secondary tables that might contain duplicate/incorrect data (e.g. 1.0.0c table)
+        if rows_processed > 0:
+            break
     return rows
 
 
@@ -286,6 +292,21 @@ def parse_song_soup(soup, fallback_title=""):
     artist_elem = soup.select_one(".song-template-artist")
     if artist_elem:
         artist = re.sub(r"\([^)]+\)", "", artist_elem.get_text()).strip()
+
+    # Attempt to find Version/Added from infobox
+    song_version = ""
+    # Check CamelCase and lowercase keys (user reported "Version")
+    for ds in ["Version", "version", "Added", "added"]:
+        v_elem = soup.select_one(f'[data-source="{ds}"] .pi-data-value')
+        if not v_elem:
+            v_elem = soup.select_one(f'.pi-data-value[data-source="{ds}"]')
+            
+        if v_elem:
+            # e.g. "6.12.0 (2025-01-29)" -> "6.12.0"
+            raw_v = v_elem.get_text(strip=True)
+            song_version = re.sub(r"\s*\(.*?\)", "", raw_v).strip()
+            if song_version:
+                break
 
     songs_data = []
     chart_tables = soup.select("table.pi-horizontal-group")
@@ -336,7 +357,7 @@ def parse_song_soup(soup, fallback_title=""):
                 "difficulty": difficulty_name,
                 "chart_constant": constant_val,
                 "level": level_str,
-                "version": "",
+                "version": song_version,
             })
 
     # Second table: Beyond tab only (if separate)
@@ -356,7 +377,7 @@ def parse_song_soup(soup, fallback_title=""):
                         "difficulty": "Beyond",
                         "chart_constant": constant_val,
                         "level": level_str,
-                        "version": "",
+                        "version": song_version,
                     })
 
     return songs_data
