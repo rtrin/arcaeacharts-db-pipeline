@@ -351,6 +351,10 @@ def parse_song_soup(soup, fallback_title=""):
             if not level_str or level_str.strip() == "-":
                 continue
             
+            # Filter out invalid entries (e.g. constant is None but level exists? suspicious)
+            if constant_val is None:
+                continue
+
             songs_data.append({
                 "song": title,
                 "artist": artist,
@@ -370,15 +374,17 @@ def parse_song_soup(soup, fallback_title=""):
             constant_val = safe_decimal(raw_constant)
             
             if level_str and level_str.strip() != "-":
-                if not any(s.get("difficulty") == "Beyond" for s in songs_data):
-                    songs_data.append({
-                        "song": title,
-                        "artist": artist,
-                        "difficulty": "Beyond",
-                        "chart_constant": constant_val,
-                        "level": level_str,
-                        "version": song_version,
-                    })
+                # Filter out invalid entries
+                if constant_val is not None:
+                    if not any(s.get("difficulty") == "Beyond" for s in songs_data):
+                        songs_data.append({
+                            "song": title,
+                            "artist": artist,
+                            "difficulty": "Beyond",
+                            "chart_constant": constant_val,
+                            "level": level_str,
+                            "version": song_version,
+                        })
 
     return songs_data
 
