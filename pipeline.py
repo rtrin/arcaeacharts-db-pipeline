@@ -10,6 +10,7 @@ import argparse
 import csv
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -50,6 +51,14 @@ logger = logging.getLogger(__name__)
 
 SONGS_BY_LEVEL_CSV = "songs_by_level.csv"
 EXPORT_CSV = "songs_export.csv"
+
+
+def _parse_level(level_str: str) -> int | None:
+    """Extract the leading integer from a level string (e.g. '9+' → 9)."""
+    if not level_str:
+        return None
+    match = re.match(r"(\d+)", level_str)
+    return int(match.group(1)) if match else None
 
 
 def get_supabase_client() -> Client:
@@ -145,7 +154,7 @@ def run_pipeline(skip_scrape: bool = False) -> None:
             "artist": (row.get("artist") or "").strip(),
             "difficulty": (row.get("difficulty") or "").strip(),
             "constant": const_val,
-            "level": (row.get("level") or "").strip(),
+            "level": _parse_level((row.get("level") or "").strip()),
             "version": (row.get("version") or "").strip(),
             # imageUrl removed
         }
@@ -154,6 +163,13 @@ def run_pipeline(skip_scrape: bool = False) -> None:
         unique_rows[key] = r # Latest entry wins
 
     db_rows = list(unique_rows.values())
+
+    # Filter out rows with null chart constants before upload
+    pre_filter_count = len(db_rows)
+    db_rows = [r for r in db_rows if r["constant"] is not None]
+    null_filtered = pre_filter_count - len(db_rows)
+    if null_filtered:
+        logger.info("Excluded %d rows with null chart constant.", null_filtered)
     
     # Rebuild export rows from the unique set to match DB
     export_rows = []
