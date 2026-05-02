@@ -154,59 +154,36 @@ def filter_song_pages(page_titles):
 # Chart Designers (Chart_Designers page)
 # -----------------------------------------------------------------------------
 
-def _parse_designer_difficulties(notes_text):
-    """Parse difficulty abbreviations from a Chart_Designers Notes cell.
-
-    Args:
-        notes_text: Raw text from the Notes column, e.g. "FTR; joint work with X"
-            or "PST/PRS/FTR" or "" (empty = all kept difficulties).
+def _parse_noted_difficulties(notes_text):
+    """Extract kept difficulty names from a Notes cell, if any abbreviations are present.
 
     Returns:
-        Set of full difficulty names that we care about (Future/Eternal/Beyond).
+        Set of matched kept difficulty names, or empty set if no abbreviations found.
     """
-    if not notes_text.strip():
-        return set(KEPT_DIFFICULTIES)
-
-    # Take text before semicolon (strips "; joint work with..." etc.)
     abbrev_part = notes_text.split(";")[0].strip()
-
     result = set()
-    all_abbrevs = set(DIFF_ABBREV_MAP) | {"PST", "PRS"}
-    found_any_abbrev = False
     for token in re.split(r"[/,\s]+", abbrev_part):
         token = token.strip().upper()
-        if token in all_abbrevs:
-            found_any_abbrev = True
-            if token in DIFF_ABBREV_MAP:
-                result.add(DIFF_ABBREV_MAP[token])
-
-    # Notes with no recognizable abbreviations are trivia, not filters
-    if not found_any_abbrev:
-        return set(KEPT_DIFFICULTIES)
+        if token in DIFF_ABBREV_MAP:
+            result.add(DIFF_ABBREV_MAP[token])
     return result
 
 
-def scrape_chart_designers():
-    """Scrape the Chart_Designers wiki page and build a charter lookup.
+def _collect_song_rows(tables):
+    """Collect (charter_name, notes_text) sub-rows grouped by normalized song title.
 
     Returns:
-        Dict mapping (normalized_title, difficulty) -> charter_name.
-        Title normalization: .strip().lower()
+        List of (norm_title, sub_rows) where sub_rows is [(charter_name, notes_text), ...].
     """
-    print(f"Fetching {CHART_DESIGNERS_PAGE} via API...")
-    html = fetch_page_via_api(CHART_DESIGNERS_PAGE)
-    soup = BeautifulSoup(html, "html.parser")
-
-    lookup = {}
-    tables = soup.select("table.article-table")
+    songs = []  # [(norm_title, [(charter_name, notes_text), ...])]
 
     for table in tables:
         trs = table.select("tr")
         if not trs:
             continue
-        # Skip header row
         current_song = ""
         remaining_rowspan = 0
+        current_sub_rows = []
 
         for tr in trs[1:]:
             tds = tr.select("td")
@@ -214,14 +191,17 @@ def scrape_chart_designers():
                 continue
 
             if remaining_rowspan > 0:
-                # Song cell is spanned from a previous row; tds[0] is Name, tds[1] is Notes
                 remaining_rowspan -= 1
                 if len(tds) < 2:
                     continue
                 charter_name = tds[0].get_text(strip=True)
                 notes_text = tds[1].get_text(strip=True)
             else:
-                # Normal row: tds[0] is Song, tds[1] is Name, tds[2] is Notes
+                # Flush previous song if we have sub-rows
+                if current_song and current_sub_rows:
+                    songs.append((current_song, current_sub_rows))
+                    current_sub_rows = []
+
                 if len(tds) < 3:
                     continue
                 song_cell = tds[0]
@@ -230,17 +210,53 @@ def scrape_chart_designers():
                     remaining_rowspan = int(rowspan) - 1
                 song_link = song_cell.select_one("a")
                 current_song = (song_link.get_text(strip=True) if song_link
-                                else song_cell.get_text(strip=True))
+                                else song_cell.get_text(strip=True)).strip().lower()
                 charter_name = tds[1].get_text(strip=True)
                 notes_text = tds[2].get_text(strip=True)
 
-            if not current_song or not charter_name:
-                continue
+            if charter_name:
+                current_sub_rows.append((charter_name, notes_text))
 
-            norm_title = current_song.strip().lower()
-            difficulties = _parse_designer_difficulties(notes_text)
-            for diff in difficulties:
+        # Flush last song in table
+        if current_song and current_sub_rows:
+            songs.append((current_song, current_sub_rows))
+
+    return songs
+
+
+def scrape_chart_designers():
+    """Scrape the Chart_Designers wiki page and build a charter lookup.
+
+    For songs with a single sub-row, that charter applies to all kept difficulties.
+    For songs with multiple sub-rows, difficulty abbreviations in Notes are used to
+    map specific charters; unmatched kept difficulties default to the last sub-row's charter.
+
+    Returns:
+        Dict mapping (normalized_title, difficulty) -> charter_name.
+    """
+    print(f"Fetching {CHART_DESIGNERS_PAGE} via API...")
+    html = fetch_page_via_api(CHART_DESIGNERS_PAGE)
+    soup = BeautifulSoup(html, "html.parser")
+
+    tables = soup.select("table.article-table")
+    song_groups = _collect_song_rows(tables)
+    lookup = {}
+
+    for norm_title, sub_rows in song_groups:
+        if len(sub_rows) == 1:
+            charter_name = sub_rows[0][0]
+            for diff in KEPT_DIFFICULTIES:
                 lookup[(norm_title, diff)] = charter_name
+        else:
+            # Map specific difficulties from Notes; last row is the default
+            assigned = {}
+            for charter_name, notes_text in sub_rows:
+                diffs = _parse_noted_difficulties(notes_text)
+                for diff in diffs:
+                    assigned[diff] = charter_name
+            default_charter = sub_rows[-1][0]
+            for diff in KEPT_DIFFICULTIES:
+                lookup[(norm_title, diff)] = assigned.get(diff, default_charter)
 
     print(f"Built charter lookup with {len(lookup)} entries.")
     return lookup
