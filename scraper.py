@@ -330,15 +330,13 @@ def parse_song_soup(soup, fallback_title=""):
         span = cell.select_one(f'span[class*="{difficulty_key}"]')
         return span.get_text(strip=True) if span else ""
 
-    # First table: default tab (PST/PRS/FTR/ETR, sometimes BYD)
+    # First table: default tab (FTR/ETR, sometimes BYD)
     default_table = chart_tables[0]
     data_cells = default_table.select("tbody td")
     if len(data_cells) >= 3:
         level_cell = data_cells[0]
         constant_cell = data_cells[2]
         difficulties = [
-            ("Past", "pst"),
-            ("Present", "prs"),
             ("Future", "ftr"),
             ("Eternal", "etr"),
             ("Beyond", "byd"),

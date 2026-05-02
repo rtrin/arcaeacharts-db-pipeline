@@ -1,15 +1,10 @@
 # Arcaea Charts (Fandom) Data
 
-Single scraper for Arcaea Fandom wiki data. Uses the MediaWiki API to fetch song metadata without direct HTML scraping.
-
-```bash
-# Scrape the Songs by Level page → CSV (Song, Artist, Difficulty, Chart Constant, Level, Version)
-python scraper.py -o songs_by_level.csv
-```
+Single scraper for Arcaea Fandom wiki data. Uses the MediaWiki API to fetch song metadata without direct HTML scraping. Only Future, Eternal, and Beyond difficulties are scraped.
 
 ## Pipeline (Scrape → Supabase)
 
-One command to scrape "Songs by Level" and upsert metadata rows into the Supabase `songs` table (no images):
+One command to scrape "Songs by Level" and upsert metadata rows into the Supabase `songs` table:
 
 ```bash
 python pipeline.py
@@ -17,16 +12,12 @@ python pipeline.py
 
 ```mermaid
 graph TD
-    A[Start: pipeline.py] --> B{skip_scrape?}
-    B -- No --> C[scraper.py: scrape_songs_by_level]
-    C --> D[songs_by_level.csv]
-    B -- Yes --> D
-    D --> E[Generate songs_export.csv]
-    E --> F[Upsert to Supabase 'songs' table]
-    F --> G[End]
+    A[Start: pipeline.py] --> B[scraper.py: scrape_songs_by_level]
+    B --> C[Filter: Future / Eternal / Beyond only]
+    C --> D[Upsert to Supabase 'songs' table]
+    D --> E[End]
 ```
 
-Optional: `--skip-scrape` to reuse existing `songs_by_level.csv`.
 Requires `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the environment or in `.env`.
 
 ## GitHub Actions (automated sync)

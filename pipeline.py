@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """
-Full sync pipeline: scrape Songs by Level, build CSV, upsert into songs table.
-No image downloading or uploading.
+Full sync pipeline: scrape Songs by Level, filter to Future/Eternal/Beyond, upsert into songs table.
 
 Credentials from env: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (required for writes).
 """
 
-import argparse
-import csv
 import logging
 import os
 import re
 import sys
-from pathlib import Path
 
 from supabase import create_client, Client  # pylint: disable=import-error
 from scraper import scrape_songs_by_level, fetch_song, scrape_news_links, filter_song_pages
@@ -49,10 +45,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SONGS_BY_LEVEL_CSV = "songs_by_level.csv"
-EXPORT_CSV = "songs_export.csv"
-
-
 def _parse_level(level_str: str) -> int | None:
     """Extract the leading integer from a level string (e.g. '9+' → 9)."""
     if not level_str:
@@ -67,23 +59,15 @@ def get_supabase_client() -> Client:
     return create_client(url, key)
 
 
-def run_pipeline(skip_scrape: bool = False) -> None:
+def run_pipeline() -> None:
     """Run sync: scrape songs by level, upsert to DB (metadata only)."""
     supabase = get_supabase_client()
-    project_root = Path(__file__).resolve().parent
-    csv_path = project_root / SONGS_BY_LEVEL_CSV
 
     # 1. Scrape Songs by Level
-    if skip_scrape and csv_path.exists():
-        with open(csv_path, newline="", encoding="utf-8") as csv_file:
-            reader = csv.DictReader(csv_file)
-            rows = list(reader)
-        logger.info("Using existing %s (%d rows).", SONGS_BY_LEVEL_CSV, len(rows))
-    else:
-        rows = scrape_songs_by_level(save_path=str(csv_path))
-        if not rows:
-            logger.error("No rows from scrape. Exiting.")
-            return
+    rows = scrape_songs_by_level()
+    if not rows:
+        logger.error("No rows from scrape. Exiting.")
+        return
 
     # 1b. Gap Check (News Section Songs vs Songs_by_Level)
     # Automatically scrape song links from the News section and check for missing songs.
@@ -130,9 +114,8 @@ def run_pipeline(skip_scrape: bool = False) -> None:
         # We continue with what we have
 
 
-    # 2. Build rows for export/upsert (Metadata Only)
-    unique_rows = {} # (title, artist, difficulty) -> row_dict
-    export_rows = []
+    # 2. Build rows for upsert (Metadata Only)
+    unique_rows = {}  # (title, artist, difficulty) -> row_dict
     
     for row in rows:
         # Standardize fields
@@ -156,11 +139,11 @@ def run_pipeline(skip_scrape: bool = False) -> None:
             "constant": const_val,
             "level": _parse_level((row.get("level") or "").strip()),
             "version": (row.get("version") or "").strip(),
-            # imageUrl removed
         }
-        # Unique key for deduplication
+        if r["difficulty"] not in {"Future", "Eternal", "Beyond"}:
+            continue
         key = (r["title"], r["artist"], r["difficulty"])
-        unique_rows[key] = r # Latest entry wins
+        unique_rows[key] = r
 
     db_rows = list(unique_rows.values())
 
@@ -171,31 +154,7 @@ def run_pipeline(skip_scrape: bool = False) -> None:
     if null_filtered:
         logger.info("Excluded %d rows with null chart constant.", null_filtered)
     
-    # Rebuild export rows from the unique set to match DB
-    export_rows = []
-    for r in db_rows:
-        export_rows.append({
-            "song": r["title"],
-            "artist": r["artist"],
-            "difficulty": r["difficulty"],
-            "chart_constant": r["constant"],
-            "level": r["level"],
-            "version": r["version"]
-        })
-
-    # 3. Write export CSV
-    export_path = project_root / EXPORT_CSV
-    fieldnames = [
-        "song", "artist", "difficulty",
-        "chart_constant", "level", "version",
-    ]
-    with open(export_path, "w", newline="", encoding="utf-8") as out_file:
-        writer = csv.DictWriter(out_file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(export_rows)
-    logger.info("Wrote %d rows to %s.", len(export_rows), EXPORT_CSV)
-
-    # 4. Upsert into Supabase
+    # 3. Upsert into Supabase
     batch_size = 100
     total = 0
     for i in range(0, len(db_rows), batch_size):
@@ -212,16 +171,8 @@ def run_pipeline(skip_scrape: bool = False) -> None:
 
 def main() -> int:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(
-        description="Sync songs metadata to Supabase (no images)."
-    )
-    parser.add_argument(
-        "--skip-scrape", action="store_true",
-        help="Reuse existing songs_by_level.csv",
-    )
-    args = parser.parse_args()
     try:
-        run_pipeline(skip_scrape=args.skip_scrape)
+        run_pipeline()
         return 0
     except Exception as err:
         logger.error("Pipeline failed: %s", err)
