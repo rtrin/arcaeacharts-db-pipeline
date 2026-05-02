@@ -27,12 +27,7 @@ WIKI_HOME_PAGE = "Arcaea_Wiki"
 REQUEST_TIMEOUT = 30
 
 CHART_DESIGNERS_PAGE = "Chart_Designers"
-DIFF_ABBREV_MAP = {
-    "FTR": "Future",
-    "ETR": "Eternal",
-    "BYD": "Beyond",
-}
-KEPT_DIFFICULTIES = set(DIFF_ABBREV_MAP.values())
+KEPT_DIFFICULTIES = {"Future", "Eternal", "Beyond"}
 
 
 # -----------------------------------------------------------------------------
@@ -154,21 +149,6 @@ def filter_song_pages(page_titles):
 # Chart Designers (Chart_Designers page)
 # -----------------------------------------------------------------------------
 
-def _parse_noted_difficulties(notes_text):
-    """Extract kept difficulty names from a Notes cell, if any abbreviations are present.
-
-    Returns:
-        Set of matched kept difficulty names, or empty set if no abbreviations found.
-    """
-    abbrev_part = notes_text.split(";")[0].strip()
-    result = set()
-    for token in re.split(r"[/,\s]+", abbrev_part):
-        token = token.strip().upper()
-        if token in DIFF_ABBREV_MAP:
-            result.add(DIFF_ABBREV_MAP[token])
-    return result
-
-
 def _collect_song_rows(tables):
     """Collect (charter_name, notes_text) sub-rows grouped by normalized song title.
 
@@ -227,9 +207,7 @@ def _collect_song_rows(tables):
 def scrape_chart_designers():
     """Scrape the Chart_Designers wiki page and build a charter lookup.
 
-    For songs with a single sub-row, that charter applies to all kept difficulties.
-    For songs with multiple sub-rows, difficulty abbreviations in Notes are used to
-    map specific charters; unmatched kept difficulties default to the last sub-row's charter.
+    Uses the last sub-row's charter name for each song across all kept difficulties.
 
     Returns:
         Dict mapping (normalized_title, difficulty) -> charter_name.
@@ -243,20 +221,9 @@ def scrape_chart_designers():
     lookup = {}
 
     for norm_title, sub_rows in song_groups:
-        if len(sub_rows) == 1:
-            charter_name = sub_rows[0][0]
-            for diff in KEPT_DIFFICULTIES:
-                lookup[(norm_title, diff)] = charter_name
-        else:
-            # Map specific difficulties from Notes; last row is the default
-            assigned = {}
-            for charter_name, notes_text in sub_rows:
-                diffs = _parse_noted_difficulties(notes_text)
-                for diff in diffs:
-                    assigned[diff] = charter_name
-            default_charter = sub_rows[-1][0]
-            for diff in KEPT_DIFFICULTIES:
-                lookup[(norm_title, diff)] = assigned.get(diff, default_charter)
+        charter_name = sub_rows[-1][0]
+        for diff in KEPT_DIFFICULTIES:
+            lookup[(norm_title, diff)] = charter_name
 
     print(f"Built charter lookup with {len(lookup)} entries.")
     return lookup
