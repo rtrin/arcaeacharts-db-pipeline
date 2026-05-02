@@ -14,8 +14,9 @@ python pipeline.py
 graph TD
     A[Start: pipeline.py] --> B[scraper.py: scrape_songs_by_level]
     B --> C[Filter: Future / Eternal / Beyond only]
-    C --> D[Upsert to Supabase 'songs' table]
-    D --> E[End]
+    C --> D[Enrich with charter names]
+    D --> E[Upsert to Supabase 'songs' table]
+    E --> F[End]
 ```
 
 Requires `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in the environment or in `.env`.
