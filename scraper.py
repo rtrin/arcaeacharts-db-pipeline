@@ -171,10 +171,18 @@ def _parse_designer_difficulties(notes_text):
     abbrev_part = notes_text.split(";")[0].strip()
 
     result = set()
+    all_abbrevs = set(DIFF_ABBREV_MAP) | {"PST", "PRS"}
+    found_any_abbrev = False
     for token in re.split(r"[/,\s]+", abbrev_part):
         token = token.strip().upper()
-        if token in DIFF_ABBREV_MAP:
-            result.add(DIFF_ABBREV_MAP[token])
+        if token in all_abbrevs:
+            found_any_abbrev = True
+            if token in DIFF_ABBREV_MAP:
+                result.add(DIFF_ABBREV_MAP[token])
+
+    # Notes with no recognizable abbreviations are trivia, not filters
+    if not found_any_abbrev:
+        return set(KEPT_DIFFICULTIES)
     return result
 
 
