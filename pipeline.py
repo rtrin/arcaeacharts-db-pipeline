@@ -11,7 +11,10 @@ import re
 import sys
 
 from supabase import create_client, Client  # pylint: disable=import-error
-from scraper import scrape_songs_by_level, fetch_song, scrape_news_links, filter_song_pages
+from scraper import (
+    scrape_songs_by_level, fetch_song, scrape_news_links, filter_song_pages,
+    scrape_chart_designers,
+)
 
 # -----------------------------------------------------------------------------
 # Env & Config
@@ -113,6 +116,13 @@ def run_pipeline() -> None:
         logger.error(f"News section scraping failed: {e}")
         # We continue with what we have
 
+    # 1c. Scrape chart designer names
+    charter_lookup = {}
+    try:
+        charter_lookup = scrape_chart_designers()
+        logger.info("Loaded %d charter entries.", len(charter_lookup))
+    except Exception as e:
+        logger.error(f"Charter scraping failed: {e}")
 
     # 2. Build rows for upsert (Metadata Only)
     unique_rows = {}  # (title, artist, difficulty) -> row_dict
@@ -142,6 +152,8 @@ def run_pipeline() -> None:
         }
         if r["difficulty"] not in {"Future", "Eternal", "Beyond"}:
             continue
+        norm_title = r["title"].strip().lower()
+        r["charter"] = charter_lookup.get((norm_title, r["difficulty"]))
         key = (r["title"], r["artist"], r["difficulty"])
         unique_rows[key] = r
 
