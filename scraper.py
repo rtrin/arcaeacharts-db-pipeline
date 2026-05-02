@@ -26,6 +26,14 @@ SONGS_BY_LEVEL_PAGE = "Songs_by_Level"
 WIKI_HOME_PAGE = "Arcaea_Wiki"
 REQUEST_TIMEOUT = 30
 
+CHART_DESIGNERS_PAGE = "Chart_Designers"
+DIFF_ABBREV_MAP = {
+    "FTR": "Future",
+    "ETR": "Eternal",
+    "BYD": "Beyond",
+}
+KEPT_DIFFICULTIES = set(DIFF_ABBREV_MAP.values())
+
 
 # -----------------------------------------------------------------------------
 # News Section Scraper
@@ -140,6 +148,94 @@ def filter_song_pages(page_titles):
     
     print(f"Filtered to {len(song_pages)} song pages.")
     return song_pages
+
+
+# -----------------------------------------------------------------------------
+# Chart Designers (Chart_Designers page)
+# -----------------------------------------------------------------------------
+
+def _parse_designer_difficulties(notes_text):
+    """Parse difficulty abbreviations from a Chart_Designers Notes cell.
+
+    Args:
+        notes_text: Raw text from the Notes column, e.g. "FTR; joint work with X"
+            or "PST/PRS/FTR" or "" (empty = all kept difficulties).
+
+    Returns:
+        Set of full difficulty names that we care about (Future/Eternal/Beyond).
+    """
+    if not notes_text.strip():
+        return set(KEPT_DIFFICULTIES)
+
+    # Take text before semicolon (strips "; joint work with..." etc.)
+    abbrev_part = notes_text.split(";")[0].strip()
+
+    result = set()
+    for token in re.split(r"[/,\s]+", abbrev_part):
+        token = token.strip().upper()
+        if token in DIFF_ABBREV_MAP:
+            result.add(DIFF_ABBREV_MAP[token])
+    return result
+
+
+def scrape_chart_designers():
+    """Scrape the Chart_Designers wiki page and build a charter lookup.
+
+    Returns:
+        Dict mapping (normalized_title, difficulty) -> charter_name.
+        Title normalization: .strip().lower()
+    """
+    print(f"Fetching {CHART_DESIGNERS_PAGE} via API...")
+    html = fetch_page_via_api(CHART_DESIGNERS_PAGE)
+    soup = BeautifulSoup(html, "html.parser")
+
+    lookup = {}
+    tables = soup.select("table.article-table")
+
+    for table in tables:
+        trs = table.select("tr")
+        if not trs:
+            continue
+        # Skip header row
+        current_song = ""
+        remaining_rowspan = 0
+
+        for tr in trs[1:]:
+            tds = tr.select("td")
+            if not tds:
+                continue
+
+            if remaining_rowspan > 0:
+                # Song cell is spanned from a previous row; tds[0] is Name, tds[1] is Notes
+                remaining_rowspan -= 1
+                if len(tds) < 2:
+                    continue
+                charter_name = tds[0].get_text(strip=True)
+                notes_text = tds[1].get_text(strip=True)
+            else:
+                # Normal row: tds[0] is Song, tds[1] is Name, tds[2] is Notes
+                if len(tds) < 3:
+                    continue
+                song_cell = tds[0]
+                rowspan = song_cell.get("rowspan")
+                if rowspan:
+                    remaining_rowspan = int(rowspan) - 1
+                song_link = song_cell.select_one("a")
+                current_song = (song_link.get_text(strip=True) if song_link
+                                else song_cell.get_text(strip=True))
+                charter_name = tds[1].get_text(strip=True)
+                notes_text = tds[2].get_text(strip=True)
+
+            if not current_song or not charter_name:
+                continue
+
+            norm_title = current_song.strip().lower()
+            difficulties = _parse_designer_difficulties(notes_text)
+            for diff in difficulties:
+                lookup[(norm_title, diff)] = charter_name
+
+    print(f"Built charter lookup with {len(lookup)} entries.")
+    return lookup
 
 
 # -----------------------------------------------------------------------------
